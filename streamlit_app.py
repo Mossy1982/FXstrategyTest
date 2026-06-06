@@ -97,6 +97,12 @@ def process_data(df):
     # Calculate volume surge signal
     df['volume_signal'] = df['delta'].abs() >= (df['delta_ma20'].abs() * volume_surge_multiplier)
     
+    # Initialize trade tracking columns
+    df['trade_signal'] = 0
+    df['entry_price'] = np.nan
+    df['exit_price'] = np.nan
+    df['pnl'] = 0.0
+    
     return df
 
 # Load data
@@ -146,11 +152,6 @@ class ForexOrderFlowStrategy:
         self.equity_curve = [self.equity]
         self.position = None
         self.current_pnl = 0
-        
-        self.data['trade_signal'] = 0
-        self.data['entry_price'] = np.nan
-        self.data['exit_price'] = np.nan
-        self.data['pnl'] = 0.0
         
     def is_session_lockout(self, timestamp):
         """Check if current time is during Asian open lockout (Sunday-Monday, first 4 hours)"""
@@ -536,27 +537,29 @@ fig_price.add_trace(go.Candlestick(
     decreasing_line_color='#FF6B6B'
 ))
 
-# Add entry points
-entries = display_data[display_data['entry_price'].notna()]
-if not entries.empty:
-    fig_price.add_trace(go.Scatter(
-        x=entries['datetime'],
-        y=entries['entry_price'],
-        mode='markers',
-        name='Entry',
-        marker=dict(size=10, color='#00D9FF', symbol='triangle-up')
-    ))
+# Add entry points - safely handle column access
+if 'entry_price' in display_data.columns:
+    entries = display_data[display_data['entry_price'].notna()]
+    if not entries.empty:
+        fig_price.add_trace(go.Scatter(
+            x=entries['datetime'],
+            y=entries['entry_price'],
+            mode='markers',
+            name='Entry',
+            marker=dict(size=10, color='#00D9FF', symbol='triangle-up')
+        ))
 
-# Add exit points
-exits = display_data[display_data['exit_price'].notna()]
-if not exits.empty:
-    fig_price.add_trace(go.Scatter(
-        x=exits['datetime'],
-        y=exits['exit_price'],
-        mode='markers',
-        name='Exit',
-        marker=dict(size=10, color='#FF6B6B', symbol='triangle-down')
-    ))
+# Add exit points - safely handle column access
+if 'exit_price' in display_data.columns:
+    exits = display_data[display_data['exit_price'].notna()]
+    if not exits.empty:
+        fig_price.add_trace(go.Scatter(
+            x=exits['datetime'],
+            y=exits['exit_price'],
+            mode='markers',
+            name='Exit',
+            marker=dict(size=10, color='#FF6B6B', symbol='triangle-down')
+        ))
 
 fig_price.update_layout(
     title="Recent Price Action with Trade Signals (Last 100 Candles)",
