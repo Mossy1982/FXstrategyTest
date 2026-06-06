@@ -23,8 +23,18 @@ st.markdown("---")
 # ============================================================================
 st.sidebar.header("⚙️ Strategy Parameters")
 
+# TRADING CAPITAL
+initial_capital = st.sidebar.number_input(
+    "Initial Trading Capital (USD)",
+    min_value=100,
+    max_value=100000,
+    value=10000,
+    step=100,
+    help="Starting account balance for backtesting"
+)
+
 max_capital_exposure = st.sidebar.number_input(
-    "Maximum Capital Exposure (R)",
+    "Maximum Capital Exposure per Trade (R)",
     min_value=10,
     max_value=1000,
     value=100,
@@ -49,6 +59,74 @@ volume_surge_multiplier = st.sidebar.slider(
     step=0.1,
     help="Delta must be X times the 20-period rolling average"
 )
+
+# TRADE DIRECTION FILTER
+st.sidebar.markdown("---")
+st.sidebar.header("📍 Trade Direction")
+trade_direction = st.sidebar.radio(
+    "Select Trade Type:",
+    options=["Both (Long & Short)", "Long Only ↑", "Short Only ↓"],
+    help="Choose which direction(s) to trade"
+)
+
+# STOP LOSS METHOD
+st.sidebar.markdown("---")
+st.sidebar.header("🛑 Stop Loss Configuration")
+stop_loss_method = st.sidebar.radio(
+    "Stop Loss Method:",
+    options=["Fixed Percentage", "Average True Range (ATR)"],
+    help="Choose how to calculate stop loss"
+)
+
+if stop_loss_method == "Fixed Percentage":
+    stop_loss_percent = st.sidebar.slider(
+        "Stop Loss %",
+        min_value=0.5,
+        max_value=5.0,
+        value=2.0,
+        step=0.1,
+        help="Percentage below/above entry price for stop loss"
+    )
+    atr_period = 14  # Default, won't be used
+    atr_multiplier = 1.0  # Default, won't be used
+else:
+    atr_period = st.sidebar.slider(
+        "ATR Period",
+        min_value=5,
+        max_value=50,
+        value=14,
+        step=1,
+        help="Number of candles for ATR calculation"
+    )
+    atr_multiplier = st.sidebar.slider(
+        "ATR Multiplier",
+        min_value=0.5,
+        max_value=3.0,
+        value=1.5,
+        step=0.1,
+        help="Multiply ATR by this value for stop loss distance"
+    )
+    stop_loss_percent = 2.0  # Default, won't be used
+
+# CURRENCY PAIR SELECTION
+st.sidebar.markdown("---")
+st.sidebar.header("💱 Currency Pair")
+major_pairs = {
+    "EUR/USD": {"symbol": "EURUSD", "description": "Euro vs US Dollar"},
+    "GBP/USD": {"symbol": "GBPUSD", "description": "British Pound vs US Dollar"},
+    "USD/JPY": {"symbol": "USDJPY", "description": "US Dollar vs Japanese Yen"},
+    "USD/CHF": {"symbol": "USDCHF", "description": "US Dollar vs Swiss Franc"},
+    "AUD/USD": {"symbol": "AUDUSD", "description": "Australian Dollar vs US Dollar"},
+    "USD/CAD": {"symbol": "USDCAD", "description": "US Dollar vs Canadian Dollar"},
+    "NZD/USD": {"symbol": "NZDUSD", "description": "New Zealand Dollar vs US Dollar"},
+}
+selected_pair = st.sidebar.selectbox(
+    "Select Major Currency Pair:",
+    options=list(major_pairs.keys()),
+    help="Choose which pair to analyze"
+)
+
+pair_info = major_pairs[selected_pair]
 
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Data Upload")
@@ -85,7 +163,22 @@ def load_sample_data():
     data['close'] = prices
     return data
 
-def process_data(df):
+def calculate_atr(df, period=14):
+    """Calculate Average True Range"""
+    df = df.copy()
+    
+    # Calculate True Range
+    df['tr1'] = df['high'] - df['low']
+    df['tr2'] = abs(df['high'] - df['close'].shift(1))
+    df['tr3'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['tr1', 'tr2', 'tr3']].max(axis=1)
+    
+    # Calculate ATR
+    df['atr'] = df['tr'].rolling(window=period, min_periods=1).mean()
+    
+    return df['atr']
+
+def process_data(df, stop_loss_method, stop_loss_percent=2.0, atr_period=14, atr_multiplier=1.5):
     """Process and validate OHLCV data"""
     df = df.copy()
     df['datetime'] = pd.to_datetime(df['datetime'])
@@ -96,6 +189,10 @@ def process_data(df):
     
     # Calculate volume surge signal
     df['volume_signal'] = df['delta'].abs() >= (df['delta_ma20'].abs() * volume_surge_multiplier)
+    
+    # Calculate ATR if needed
+    if stop_loss_method == "Average True Range (ATR)":
+        df['atr'] = calculate_atr(df, period=atr_period)
     
     # Initialize trade tracking columns
     df['trade_signal'] = 0
@@ -109,17 +206,17 @@ def process_data(df):
 if uploaded_file:
     try:
         data = pd.read_csv(uploaded_file)
-        data = process_data(data)
+        data = process_data(data, stop_loss_method, stop_loss_percent, atr_period, atr_multiplier)
         st.sidebar.success("✅ Data loaded successfully!")
     except Exception as e:
         st.sidebar.error(f"❌ Error loading data: {str(e)}")
         st.warning("Using sample data for demonstration...")
         data = load_sample_data()
-        data = process_data(data)
+        data = process_data(data, stop_loss_method, stop_loss_percent, atr_period, atr_multiplier)
 else:
     st.info("📂 Upload a CSV file or using sample data for demo...")
     data = load_sample_data()
-    data = process_data(data)
+    data = process_data(data, stop_loss_method, stop_loss_percent, atr_period, atr_multiplier)
 
 # ============================================================================
 # TRADING LOGIC & BACKTESTING ENGINE
@@ -134,13 +231,23 @@ class ForexOrderFlowStrategy:
     - 6-candle invalidation rule
     - Volume normalization
     - Break-even risk elimination
+    - Trade direction filtering (Long/Short/Both)
+    - ATR-based or fixed percentage stop loss
     """
     
-    def __init__(self, data, max_exposure, min_rrr, volume_multiplier):
+    def __init__(self, data, initial_capital, max_exposure, min_rrr, volume_multiplier, 
+                 trade_direction="Both (Long & Short)", stop_loss_method="Fixed Percentage",
+                 stop_loss_percent=2.0, atr_period=14, atr_multiplier=1.5):
         self.data = data.copy()
+        self.initial_capital = initial_capital
         self.max_exposure = max_exposure
         self.min_rrr = min_rrr
         self.volume_multiplier = volume_multiplier
+        self.trade_direction = trade_direction
+        self.stop_loss_method = stop_loss_method
+        self.stop_loss_percent = stop_loss_percent
+        self.atr_period = atr_period
+        self.atr_multiplier = atr_multiplier
         
         # Trading parameters
         self.pip_value = 0.0001  # For standard pairs
@@ -148,7 +255,7 @@ class ForexOrderFlowStrategy:
         self.pip_value_per_lot = 10  # $10 per pip per standard lot
         
         self.trades = []
-        self.equity = max_exposure * 100  # Starting balance
+        self.equity = initial_capital
         self.equity_curve = [self.equity]
         self.position = None
         self.current_pnl = 0
@@ -183,12 +290,19 @@ class ForexOrderFlowStrategy:
         
         return min(lot_size, 10)  # Cap at 10 standard lots
     
-    def validate_trade(self, entry, stop_loss, take_profit):
+    def validate_trade(self, entry, stop_loss, take_profit, direction):
         """
         Validate trade setup:
-        1. Position sizing within exposure limits
-        2. Risk-to-reward ratio meets minimum threshold
+        1. Check trade direction filter
+        2. Position sizing within exposure limits
+        3. Risk-to-reward ratio meets minimum threshold
         """
+        # Check direction filter
+        if self.trade_direction == "Long Only ↑" and direction == -1:
+            return False, "Short trades disabled - Long Only mode"
+        if self.trade_direction == "Short Only ↓" and direction == 1:
+            return False, "Long trades disabled - Short Only mode"
+        
         # Calculate lot size
         lot_size = self.calculate_lot_size(entry, stop_loss)
         if lot_size == 0:
@@ -206,6 +320,25 @@ class ForexOrderFlowStrategy:
             return False, f"RRR {rrr:.2f} < Minimum {self.min_rrr}"
         
         return True, lot_size
+    
+    def calculate_stop_loss(self, entry, direction, idx):
+        """Calculate stop loss based on selected method"""
+        if self.stop_loss_method == "Average True Range (ATR)":
+            if 'atr' in self.data.columns and not pd.isna(self.data.loc[idx, 'atr']):
+                atr_value = self.data.loc[idx, 'atr']
+                if direction == 1:  # Long
+                    stop_loss = entry - (atr_value * self.atr_multiplier)
+                else:  # Short
+                    stop_loss = entry + (atr_value * self.atr_multiplier)
+                return stop_loss
+        
+        # Default to fixed percentage
+        if direction == 1:  # Long
+            stop_loss = entry * (1 - self.stop_loss_percent / 100)
+        else:  # Short
+            stop_loss = entry * (1 + self.stop_loss_percent / 100)
+        
+        return stop_loss
     
     def backtest(self):
         """Execute backtesting logic"""
@@ -245,7 +378,7 @@ class ForexOrderFlowStrategy:
         if self.position:
             self._close_position(len(self.data) - 1, 'End of Data')
         
-        self.data['equity'] = np.cumsum(self.data['pnl']) + (self.equity)
+        self.data['equity'] = np.cumsum(self.data['pnl']) + self.initial_capital
         return self._generate_metrics()
     
     def _generate_entry_signal(self, idx):
@@ -269,12 +402,12 @@ class ForexOrderFlowStrategy:
         entry = signal['entry']
         direction = signal['direction']
         
-        # Calculate stop loss (2% below/above entry)
-        stop_loss = entry * (0.98 if direction == 1 else 1.02)
+        # Calculate stop loss using selected method
+        stop_loss = self.calculate_stop_loss(entry, direction, idx)
         take_profit = entry + (direction * abs(entry - stop_loss) * self.min_rrr)
         
         # Validate trade
-        valid, lot_size = self.validate_trade(entry, stop_loss, take_profit)
+        valid, lot_size = self.validate_trade(entry, stop_loss, take_profit, direction)
         if not valid:
             return
         
@@ -388,6 +521,8 @@ class ForexOrderFlowStrategy:
                 'profit_factor': 0,
                 'avg_win': 0,
                 'avg_loss': 0,
+                'long_trades': 0,
+                'short_trades': 0,
                 'trades_df': pd.DataFrame()
             }
         
@@ -396,6 +531,8 @@ class ForexOrderFlowStrategy:
         total_trades = len(trades_df)
         winning_trades = len(trades_df[trades_df['pnl'] > 0])
         losing_trades = len(trades_df[trades_df['pnl'] < 0])
+        long_trades = len(trades_df[trades_df['direction'] == 'Long'])
+        short_trades = len(trades_df[trades_df['direction'] == 'Short'])
         win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
         
         net_profit = trades_df['pnl'].sum()
@@ -417,6 +554,8 @@ class ForexOrderFlowStrategy:
             'total_trades': total_trades,
             'winning_trades': winning_trades,
             'losing_trades': losing_trades,
+            'long_trades': long_trades,
+            'short_trades': short_trades,
             'win_rate': win_rate,
             'net_profit': net_profit,
             'max_drawdown': max_drawdown,
@@ -436,14 +575,38 @@ st.subheader("📊 Running Backtest...")
 with st.spinner("Analyzing order flow and executing strategy..."):
     strategy = ForexOrderFlowStrategy(
         data,
+        initial_capital,
         max_capital_exposure,
         min_rrr,
-        volume_surge_multiplier
+        volume_surge_multiplier,
+        trade_direction=trade_direction,
+        stop_loss_method=stop_loss_method,
+        stop_loss_percent=stop_loss_percent,
+        atr_period=atr_period,
+        atr_multiplier=atr_multiplier
     )
     metrics = strategy.backtest()
 
 # ============================================================================
-# DISPLAY RESULTS
+# DISPLAY RESULTS - HEADER INFO
+# ============================================================================
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    st.info(f"💱 **Pair:** {selected_pair}\n\n{pair_info['description']}")
+
+with col2:
+    st.info(f"🧮 **Account:**\n\nStarting: ${initial_capital:,.0f}\n\nFinal: ${metrics['equity_curve'][-1]:,.2f}" if metrics['equity_curve'] else f"🧮 **Account:**\n\nStarting: ${initial_capital:,.0f}")
+
+with col3:
+    mode_text = "🔄 Both" if trade_direction == "Both (Long & Short)" else trade_direction
+    st.info(f"🎯 **Mode:** {mode_text}\n\n📍 **SL:** {stop_loss_method}")
+
+st.markdown("---")
+
+# ============================================================================
+# KEY METRICS
 # ============================================================================
 
 col1, col2, col3, col4 = st.columns(4)
@@ -451,15 +614,15 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric(
         "Net Profit",
-        f"R{metrics['net_profit']:.2f}",
-        delta=f"{(metrics['net_profit']/10000*100):.1f}%" if metrics['net_profit'] != 0 else "0%"
+        f"${metrics['net_profit']:.2f}",
+        delta=f"{(metrics['net_profit']/initial_capital*100):.1f}%" if metrics['net_profit'] != 0 else "0%"
     )
 
 with col2:
     st.metric(
         "Win Rate",
         f"{metrics['win_rate']:.1f}%",
-        delta=f"{metrics['winning_trades']} wins"
+        delta=f"{metrics['winning_trades']}W / {metrics['losing_trades']}L"
     )
 
 with col3:
@@ -501,10 +664,18 @@ if metrics['equity_curve']:
         fillcolor='rgba(0, 204, 150, 0.1)'
     ))
     
+    # Add starting capital line
+    fig_equity.add_hline(
+        y=initial_capital,
+        line_dash="dash",
+        line_color="gray",
+        annotation_text="Starting Capital"
+    )
+    
     fig_equity.update_layout(
         title="Account Equity Over Time",
         xaxis_title="Trade #",
-        yaxis_title="Equity (R)",
+        yaxis_title="Equity (USD)",
         hovermode='x unified',
         template='plotly_dark',
         height=400
@@ -643,6 +814,29 @@ with col2:
     st.plotly_chart(fig_delta, use_container_width=True)
 
 # ============================================================================
+# TRADE DIRECTION BREAKDOWN
+# ============================================================================
+
+if metrics['total_trades'] > 0:
+    st.subheader("📊 Trade Direction Breakdown")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Long Trades", metrics['long_trades'])
+    
+    with col2:
+        st.metric("Short Trades", metrics['short_trades'])
+    
+    with col3:
+        if metrics['long_trades'] > 0:
+            long_wins = len(metrics['trades_df'][(metrics['trades_df']['direction'] == 'Long') & (metrics['trades_df']['pnl'] > 0)])
+            long_win_rate = (long_wins / metrics['long_trades'] * 100)
+            st.metric("Long Win Rate", f"{long_win_rate:.1f}%")
+        else:
+            st.metric("Long Win Rate", "N/A")
+
+# ============================================================================
 # TRADE DETAILS TABLE
 # ============================================================================
 
@@ -686,14 +880,14 @@ with summary_col1:
     st.metric("Losing Trades", metrics['losing_trades'])
 
 with summary_col2:
-    st.metric("Average Win", f"R{metrics['avg_win']:.2f}")
-    st.metric("Average Loss", f"R{metrics['avg_loss']:.2f}")
+    st.metric("Average Win", f"${metrics['avg_win']:.2f}")
+    st.metric("Average Loss", f"${metrics['avg_loss']:.2f}")
     st.metric("Profit Factor", f"{metrics['profit_factor']:.2f}x")
 
 with summary_col3:
     st.metric("Win Rate", f"{metrics['win_rate']:.1f}%")
     st.metric("Max Drawdown", f"{metrics['max_drawdown']:.2f}%")
-    st.metric("Net Profit", f"R{metrics['net_profit']:.2f}")
+    st.metric("Return on Account", f"{(metrics['net_profit']/initial_capital*100):.2f}%")
 
 # ============================================================================
 # FOOTER
@@ -702,14 +896,19 @@ with summary_col3:
 st.markdown("---")
 st.markdown("""
 ### 📌 Strategy Rules Summary
+- **Trading Capital**: ${:,.0f}
 - **Dynamic Position Sizing**: R{}/trade with lot calculation based on risk
 - **Risk-to-Reward Validation**: Minimum {}:1 ratio enforced
 - **Volume Normalization**: Delta surge at {}× rolling 20-period average
 - **Session Lockout**: First 4 hours of Sunday/Monday Asian open blocked
 - **6-Candle Invalidation**: Positions auto-close if unprofitable within 30 minutes
 - **Break-Even Risk Elimination**: Stop moved to entry after 1R profit achieved
+- **Trade Direction**: {}
+- **Stop Loss Method**: {}
+- **Currency Pair**: {}
 
 ### ⚠️ Disclaimer
 This backtester is for educational purposes only. Past performance does not guarantee future results.
 Always conduct your own analysis before live trading.
-""".format(max_capital_exposure, min_rrr, volume_surge_multiplier))
+""".format(initial_capital, max_capital_exposure, min_rrr, volume_surge_multiplier, 
+          trade_direction, stop_loss_method, selected_pair))
