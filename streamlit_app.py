@@ -23,14 +23,14 @@ st.markdown("---")
 # ============================================================================
 st.sidebar.header("⚙️ Strategy Parameters")
 
-# TRADING CAPITAL
+# TRADING CAPITAL - Changed to ZAR
 initial_capital = st.sidebar.number_input(
-    "Initial Trading Capital (USD)",
-    min_value=100,
-    max_value=100000,
-    value=10000,
-    step=100,
-    help="Starting account balance for backtesting"
+    "Initial Trading Capital (ZAR)",
+    min_value=1000,
+    max_value=1000000,
+    value=150000,
+    step=1000,
+    help="Starting account balance for backtesting in South African Rand"
 )
 
 max_capital_exposure = st.sidebar.number_input(
@@ -108,7 +108,7 @@ else:
     )
     stop_loss_percent = 2.0  # Default, won't be used
 
-# CURRENCY PAIR SELECTION
+# CURRENCY PAIR SELECTION - Added XAU/USD
 st.sidebar.markdown("---")
 st.sidebar.header("💱 Currency Pair")
 major_pairs = {
@@ -119,6 +119,7 @@ major_pairs = {
     "AUD/USD": {"symbol": "AUDUSD", "description": "Australian Dollar vs US Dollar"},
     "USD/CAD": {"symbol": "USDCAD", "description": "US Dollar vs Canadian Dollar"},
     "NZD/USD": {"symbol": "NZDUSD", "description": "New Zealand Dollar vs US Dollar"},
+    "XAU/USD": {"symbol": "XAUUSD", "description": "Gold vs US Dollar"},
 }
 selected_pair = st.sidebar.selectbox(
     "Select Major Currency Pair:",
@@ -567,6 +568,163 @@ class ForexOrderFlowStrategy:
         }
 
 # ============================================================================
+# STRATEGY ANALYST - NEW FEATURE
+# ============================================================================
+
+class StrategyAnalyst:
+    """AI-powered analyst to identify strategy pitfalls and improvements"""
+    
+    def __init__(self, metrics, strategy_params):
+        self.metrics = metrics
+        self.strategy_params = strategy_params
+        self.pitfalls = []
+        self.recommendations = []
+    
+    def analyze(self):
+        """Run comprehensive strategy analysis"""
+        if self.metrics['total_trades'] == 0:
+            return self._no_trades_analysis()
+        
+        self._check_win_rate()
+        self._check_profit_factor()
+        self._check_drawdown()
+        self._check_trade_balance()
+        self._check_rrr_efficiency()
+        self._check_average_trades()
+        self._check_position_sizing()
+        
+        return {
+            'pitfalls': self.pitfalls,
+            'recommendations': self.recommendations,
+            'risk_level': self._assess_risk_level()
+        }
+    
+    def _no_trades_analysis(self):
+        """Handle case when no trades were generated"""
+        return {
+            'pitfalls': [
+                "⚠️ No trades were generated during backtest",
+                "Strategy parameters may be too restrictive"
+            ],
+            'recommendations': [
+                "📝 Reduce minimum Risk-to-Reward Ratio",
+                "📝 Lower Volume Surge Multiplier threshold",
+                "📝 Increase Maximum Capital Exposure per trade",
+                "📝 Verify uploaded data contains valid signals"
+            ],
+            'risk_level': 'N/A'
+        }
+    
+    def _check_win_rate(self):
+        """Analyze win rate"""
+        wr = self.metrics['win_rate']
+        
+        if wr < 30:
+            self.pitfalls.append(f"❌ Win Rate critically low at {wr:.1f}% (Below 30%)")
+            self.recommendations.append("🎯 Improve entry signal quality or strengthen filter conditions")
+        elif wr < 40:
+            self.pitfalls.append(f"⚠️ Win Rate below ideal at {wr:.1f}% (30-40%)")
+            self.recommendations.append("📈 Refine volume signal thresholds or add confirmation indicators")
+        elif wr > 70:
+            self.pitfalls.append(f"⚠️ Win Rate suspiciously high at {wr:.1f}% - possible overfitting")
+            self.recommendations.append("🔍 Backtest on out-of-sample data or recent time periods")
+    
+    def _check_profit_factor(self):
+        """Analyze profit factor"""
+        pf = self.metrics['profit_factor']
+        
+        if pf < 1.0:
+            self.pitfalls.append(f"❌ Profit Factor {pf:.2f} - Strategy is unprofitable")
+            self.recommendations.append("🛑 Increase stop loss distance or improve entry timing")
+        elif pf < 1.5:
+            self.pitfalls.append(f"⚠️ Profit Factor {pf:.2f} - Marginal profitability")
+            self.recommendations.append("💰 Increase minimum RRR or tighten trade selection filters")
+        elif pf > 3.0:
+            self.pitfalls.append(f"⚠️ Profit Factor {pf:.2f} - May indicate overfitting")
+            self.recommendations.append("📊 Validate on different market conditions or time periods")
+    
+    def _check_drawdown(self):
+        """Analyze maximum drawdown"""
+        dd = abs(self.metrics['max_drawdown'])
+        
+        if dd > 30:
+            self.pitfalls.append(f"❌ Max Drawdown {dd:.2f}% - Excessive risk exposure")
+            self.recommendations.append("🛡️ Reduce position size or implement tighter stop losses")
+        elif dd > 20:
+            self.pitfalls.append(f"⚠️ Max Drawdown {dd:.2f}% - High drawdown risk")
+            self.recommendations.append("💾 Consider reducing per-trade exposure or risk management")
+        elif dd < 5:
+            self.recommendations.append("✅ Excellent risk management with low drawdown")
+    
+    def _check_trade_balance(self):
+        """Analyze long vs short trade balance"""
+        total = self.metrics['total_trades']
+        long_ratio = self.metrics['long_trades'] / total if total > 0 else 0
+        
+        if long_ratio > 0.85 or long_ratio < 0.15:
+            self.pitfalls.append(f"⚠️ Imbalanced trade direction: {long_ratio*100:.0f}% Long / {(1-long_ratio)*100:.0f}% Short")
+            self.recommendations.append("⚖️ Strategy may be biased to one direction - check for market regime dependency")
+    
+    def _check_rrr_efficiency(self):
+        """Analyze Risk-to-Reward efficiency"""
+        trades_df = self.metrics['trades_df']
+        if len(trades_df) == 0:
+            return
+        
+        actual_rrr = trades_df['reward'].mean() / trades_df['risk'].mean() if trades_df['risk'].mean() > 0 else 0
+        min_rrr = self.strategy_params.get('min_rrr', 1.5)
+        
+        if actual_rrr < min_rrr * 0.8:
+            self.pitfalls.append(f"⚠️ Actual RRR {actual_rrr:.2f} underperforming minimum {min_rrr:.2f}")
+            self.recommendations.append("📍 Adjust take profit targets to achieve better reward/risk ratio")
+    
+    def _check_average_trades(self):
+        """Analyze trade frequency"""
+        total = self.metrics['total_trades']
+        
+        if total < 5:
+            self.pitfalls.append(f"⚠️ Only {total} trades generated - insufficient data")
+            self.recommendations.append("📈 Consider relaxing entry filters for more trading opportunities")
+        elif total > 100:
+            self.recommendations.append("✅ Adequate trade sample size for statistical validity")
+    
+    def _check_position_sizing(self):
+        """Analyze position sizing quality"""
+        trades_df = self.metrics['trades_df']
+        if len(trades_df) > 0 and 'lot_size' in trades_df.columns:
+            avg_lot = trades_df['lot_size'].mean()
+            if avg_lot < 0.1:
+                self.pitfalls.append(f"⚠️ Average position size very small ({avg_lot:.3f} lots)")
+                self.recommendations.append("💪 Consider increasing maximum exposure per trade")
+    
+    def _assess_risk_level(self):
+        """Assess overall risk level"""
+        score = 0
+        
+        # Win rate (0-25 points)
+        wr = self.metrics['win_rate']
+        score += min(25, wr / 2)
+        
+        # Profit factor (0-25 points)
+        pf = self.metrics['profit_factor']
+        score += min(25, pf * 8)
+        
+        # Drawdown (0-25 points) - lower is better
+        dd = abs(self.metrics['max_drawdown'])
+        score += max(0, 25 - (dd * 0.8))
+        
+        # Trade count (0-25 points)
+        trades = self.metrics['total_trades']
+        score += min(25, trades / 4)
+        
+        if score < 40:
+            return "🔴 HIGH RISK - Needs significant improvement"
+        elif score < 60:
+            return "🟡 MEDIUM RISK - Has potential but needs refinement"
+        else:
+            return "🟢 LOW RISK - Strategy shows promise"
+
+# ============================================================================
 # RUN BACKTEST
 # ============================================================================
 
@@ -586,6 +744,14 @@ with st.spinner("Analyzing order flow and executing strategy..."):
         atr_multiplier=atr_multiplier
     )
     metrics = strategy.backtest()
+    
+    # Run Strategy Analysis
+    analyst = StrategyAnalyst(metrics, {
+        'min_rrr': min_rrr,
+        'volume_multiplier': volume_surge_multiplier,
+        'stop_loss_method': stop_loss_method
+    })
+    analysis = analyst.analyze()
 
 # ============================================================================
 # DISPLAY RESULTS - HEADER INFO
@@ -597,12 +763,39 @@ with col1:
     st.info(f"💱 **Pair:** {selected_pair}\n\n{pair_info['description']}")
 
 with col2:
-    st.info(f"🧮 **Account:**\n\nStarting: ${initial_capital:,.0f}\n\nFinal: ${metrics['equity_curve'][-1]:,.2f}" if metrics['equity_curve'] else f"🧮 **Account:**\n\nStarting: ${initial_capital:,.0f}")
+    st.info(f"🧮 **Account (ZAR):**\n\nStarting: R{initial_capital:,.0f}\n\nFinal: R{metrics['equity_curve'][-1]:,.2f}" if metrics['equity_curve'] else f"🧮 **Account:**\n\nStarting: R{initial_capital:,.0f}")
 
 with col3:
     mode_text = "🔄 Both" if trade_direction == "Both (Long & Short)" else trade_direction
     st.info(f"🎯 **Mode:** {mode_text}\n\n📍 **SL:** {stop_loss_method}")
 
+st.markdown("---")
+
+# ============================================================================
+# STRATEGY ANALYST REPORT - NEW SECTION
+# ============================================================================
+
+st.subheader("🔍 Strategy Analyst Report")
+
+analyst_col1, analyst_col2 = st.columns([1, 1])
+
+with analyst_col1:
+    st.markdown("### 🚨 Identified Pitfalls")
+    if analysis['pitfalls']:
+        for pitfall in analysis['pitfalls']:
+            st.markdown(f"- {pitfall}")
+    else:
+        st.markdown("✅ No critical pitfalls detected!")
+
+with analyst_col2:
+    st.markdown("### 💡 Recommendations")
+    if analysis['recommendations']:
+        for i, rec in enumerate(analysis['recommendations'], 1):
+            st.markdown(f"{i}. {rec}")
+    else:
+        st.markdown("✅ Strategy parameters look good!")
+
+st.markdown(f"### 📊 Risk Assessment: {analysis['risk_level']}")
 st.markdown("---")
 
 # ============================================================================
@@ -614,7 +807,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric(
         "Net Profit",
-        f"${metrics['net_profit']:.2f}",
+        f"R{metrics['net_profit']:.2f}",
         delta=f"{(metrics['net_profit']/initial_capital*100):.1f}%" if metrics['net_profit'] != 0 else "0%"
     )
 
@@ -673,9 +866,9 @@ if metrics['equity_curve']:
     )
     
     fig_equity.update_layout(
-        title="Account Equity Over Time",
+        title="Account Equity Over Time (ZAR)",
         xaxis_title="Trade #",
-        yaxis_title="Equity (USD)",
+        yaxis_title="Equity (ZAR)",
         hovermode='x unified',
         template='plotly_dark',
         height=400
@@ -880,8 +1073,8 @@ with summary_col1:
     st.metric("Losing Trades", metrics['losing_trades'])
 
 with summary_col2:
-    st.metric("Average Win", f"${metrics['avg_win']:.2f}")
-    st.metric("Average Loss", f"${metrics['avg_loss']:.2f}")
+    st.metric("Average Win", f"R{metrics['avg_win']:.2f}")
+    st.metric("Average Loss", f"R{metrics['avg_loss']:.2f}")
     st.metric("Profit Factor", f"{metrics['profit_factor']:.2f}x")
 
 with summary_col3:
@@ -896,7 +1089,7 @@ with summary_col3:
 st.markdown("---")
 st.markdown("""
 ### 📌 Strategy Rules Summary
-- **Trading Capital**: ${:,.0f}
+- **Trading Capital**: R{:,.0f} (ZAR)
 - **Dynamic Position Sizing**: R{}/trade with lot calculation based on risk
 - **Risk-to-Reward Validation**: Minimum {}:1 ratio enforced
 - **Volume Normalization**: Delta surge at {}× rolling 20-period average
